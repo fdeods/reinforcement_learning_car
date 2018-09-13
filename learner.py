@@ -55,13 +55,8 @@ class QLearner:
     return State(distances)
 
   def learn(self, state, action, new_state, reward):
-    # print("current=" + str(state.measurings))
-    # print("new=" + str(new_state.measurings))
-    # print(np.max(self.qtable[self.state_to_number(new_state), :]))
-    # print (self.qtable[self.state_to_number(state), action])
-    # print("==============")
     self.qtable[self.state_to_number(state), action] += lr * (reward + y * np.max(self.qtable[self.state_to_number(new_state), :]) - self.qtable[self.state_to_number(state), action])
 
   def log_statistics(self, history, track_number):
-    with open("q_learning_stats_"+str(track_number), "w") as outfile:
+    with open('logs/q_learning_stats_'+str(track_number), "w") as outfile:
       outfile.write('\n'.join(history))
