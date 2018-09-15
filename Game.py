@@ -1,12 +1,15 @@
 import os
 import pygame
+import sys
 from math import tan, radians, degrees, sin, cos
 
 from Car import *
 from Track import Track
 from Config import *
 from utils import message_to_screen, map_distances_to_colors
-from learner import QLearner
+from learner import *
+from policy import *
+from logger import *
 from state import State
 
 class Game:
@@ -24,6 +27,7 @@ class Game:
         self.car = None
         self.track = None
         self.learner = None
+        self.logger = None
 
         self.points = 0
         self.crashed = False
@@ -48,12 +52,6 @@ class Game:
             # User input
             pressed = pygame.key.get_pressed()
 
-            if pressed[pygame.K_r] and self.crashed == True:
-                crashed = False
-                self.reset_game(NonStopCar, self.track.start_pos)
-                self.clock.tick(self.ticks)
-                continue
-
             if pressed[pygame.K_RIGHT]:
                 action = 1
             elif pressed[pygame.K_LEFT]:
@@ -71,7 +69,7 @@ class Game:
 
             self.points += 1
 
-            if self.points == 200:
+            if self.points == winning_points:
                 break
 
             distances = self.track.measure_intersections((c1,c2), self.car.sensors)
@@ -111,32 +109,37 @@ class Game:
         self.car_image = pygame.transform.scale(self.car_image, (car_length, car_width))
         self.reset_game(NonStopCar, self.track.start_pos)
         action = 0
+        prevstate = 0
         iteration = 1
         history = []
-        print("Iteration = 0")
-        print("")
-        nextstate = None
+        self.logger.add_entry("Iteration = 0")
+
+        (c1, c2) = self.car.position * ppu
+        distances = self.track.measure_intersections((c1,c2), self.car.sensors)
+        prevstate = State(distances, self.gran)
+        prevaction = 0
 
         while not self.exit:
-            # if len(history) == 5000:
-            #     break
+            if len(history) == number_of_probes:
+                print("")
+                print("level impossible")
+                break
 
             iteration += 1
-            dt = self.clock.get_time() / 500
 
-            # Event queue
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.exit = True
+            # # Event queue
+            # for event in pygame.event.get():
+            #     if event.type == pygame.QUIT:
+            #         self.exit = True
 
-            # User input
-            pressed = pygame.key.get_pressed()
+            # # User input
+            # pressed = pygame.key.get_pressed()
 
-            if pressed[pygame.K_r] and self.crashed == True:
-                crashed = False
-                self.reset_game(NonStopCar, self.track.start_pos)
-                self.clock.tick(self.ticks)
-                continue
+            # if pressed[pygame.K_r] and self.crashed == True:
+            #     crashed = False
+            #     self.reset_game(NonStopCar, self.track.start_pos)
+            #     self.clock.tick(self.ticks)
+            #     continue
 
             # Logic
             self.car.update(action)
@@ -148,11 +151,10 @@ class Game:
 
             self.points += 1
 
-            if self.points == 100:
-                # print("overall states visited = " + str(len(self.learner.QIDic)))
-                # print("===============================================")
+            if self.points == winning_points:
+                print("")
+                print("level completed")
                 history.append(str(self.points))
-                # print("Iteration = " + str(len(history)))
                 # self.reset_game(NonStopCar, self.track.start_pos)
                 # action = 0
                 # self.clock.tick(self.ticks)
@@ -162,14 +164,10 @@ class Game:
             distances = self.track.measure_intersections((c1,c2), self.car.sensors)
 
             if iteration % states_granularity == 0:
-                print ("car in : " + str(c1) + " " + str(c2))
-                print("car angle = " + str(self.car.angle))
-                s = State(distances)
+                self.logger.add_entry("car in : " + str(c1) + " " + str(c2))
+                self.logger.add_entry("car angle = " + str(self.car.angle))
 
-                if nextstate != None:
-                    if nextstate.hash() != s.hash():
-                        print("SHIT")
-                        sys.exit(1)
+                s = State(distances, self.gran)
 
                 logging = [str(s.hash())]
                 logging.append(str(distances))
@@ -180,50 +178,53 @@ class Game:
                 logging.append(" -> " + str(action) + " ----> ")
 
                 r0 = self.learner.calculate_score(collision_detected)  # get the immediate reward of this step
-                s1 = self.learner.new_state_after_action(s, action, self.car, self.track)  # new state after taking the best action
+                s1 = self.learner.new_state_after_action(s, action, self.car, self.track, self.gran)  # new state after taking the best action
                 # build the Q table, indexed by (state, action) pair
                 self.learner.learn(s, action, s1, r0)
                 
                 logging.append(str(self.learner.qtable[self.learner.state_to_number(s), :]))
-                print(' '.join(logging))
-                print("predicted state = " + str(s1.hash()))
+                self.logger.add_entry(' '.join(logging))
+                self.logger.add_entry("predicted state = " + str(s1.hash()))
 
                 if collision_detected:
-                    print("overall states visited = " + str(len(self.learner.QIDic)))
-                    print("===============================================")
+                    self.logger.add_entry("overall states visited = " + str(len(self.learner.QIDic)))
+                    self.logger.add_entry("===============================================")
                     history.append(str(self.points))
-                    print("Iteration = " + str(len(history)))
+                    self.logger.add_entry("Iteration = " + str(len(history)))
+                    print(str(len(history)), end =" ")
+                    sys.stdout.flush()
                     self.reset_game(NonStopCar, self.track.start_pos)
                     action = 0
                     self.clock.tick(self.ticks)
                     continue
             
             # Drawing
-            self.screen.fill((0, 0, 0))
-            self.track.draw()
-            rotated = pygame.transform.rotate(self.car_image, self.car.angle)
-            rect = rotated.get_rect()
-            self.screen.blit(rotated, (c1 - rect.width / 2, c2 - rect.height / 2))
+            # self.screen.fill((0, 0, 0))
+            # self.track.draw()
+            # rotated = pygame.transform.rotate(self.car_image, self.car.angle)
+            # rect = rotated.get_rect()
+            # self.screen.blit(rotated, (c1 - rect.width / 2, c2 - rect.height / 2))
 
-            colors = map_distances_to_colors(distances)
+            # colors = map_distances_to_colors(distances)
 
-            # draw car points
-            pygame.draw.circle(self.screen, (255, 255, 255), self.car.front_point, 2)
-            pygame.draw.circle(self.screen, (255, 255, 255), self.car.back_point, 2)
+            # # draw car points
+            # pygame.draw.circle(self.screen, (255, 255, 255), self.car.front_point, 2)
+            # pygame.draw.circle(self.screen, (255, 255, 255), self.car.back_point, 2)
 
-            for corner in self.car.corners:
-                pygame.draw.circle(self.screen, (0, 0, 255), corner, 2)
+            # for corner in self.car.corners:
+            #     pygame.draw.circle(self.screen, (0, 0, 255), corner, 2)
 
-            # draw sensor lines
-            for i in range(len(self.car.sensors)):
-                pygame.draw.line(self.screen, colors[i], (c1, c2), self.car.sensors[i])
+            # # draw sensor lines
+            # for i in range(len(self.car.sensors)):
+            #     pygame.draw.line(self.screen, colors[i], (c1, c2), self.car.sensors[i])
 
-            self.update_stats(distances, colors)
+            # self.update_stats(distances, colors)
 
-            pygame.display.flip()
-            self.clock.tick(self.ticks)
+            # pygame.display.flip()
+            # self.clock.tick(self.ticks)
+            self.logger.flush()
 
-        self.learner.log_statistics(history, self.track.track_number)
+        self.learner.log_statistics(history, self.track.track_number, self.gran)
 
     def update_stats(self, distances, colors):
         message_to_screen(self.screen, "POINTS = " + str(self.points), white, (int((display_width / 2)), int(display_height / 2)), size=FontSize.MEDIUM)
@@ -233,20 +234,56 @@ class Game:
         message_to_screen(self.screen, "R30 = " + str(distances[3]), colors[3], (100,120), size=FontSize.SMALL)
         message_to_screen(self.screen, "R60 = " + str(distances[4]), colors[4], (100,150), size=FontSize.SMALL)
 
-    def run_game(self, learner=None, policy=None):
-        if learner != None:
-            self.learner = QLearner()
 
-        for i in range(4):
+    def run_myself(self):
+        for i in range(5):
+            print(i)
             self.track = Track(self.screen, i)
-            if learner:
-                self.nonStopCarRun_learning()
-            else:
-                self.nonStopCarRun()
+            self.nonStopCarRun()
+
+
+    def run_const_learner(self, learner, policy):
+        self.logger = Logger(learner, policy, self.gran)
+        self.learner = create_learner(learner, policy)
+
+        for i in range(5):
+            self.track = Track(self.screen, i)
+            self.nonStopCarRun_learning()
+
+        self.logger.close()
+            
+
+    def run_non_const_learner(self, learner, policy):
+        self.logger = Logger(learner, policy, self.gran)
+
+        for i in range(1):
+            self.learner = create_learner(learner, policy)
+            self.track = Track(self.screen, i)
+            self.nonStopCarRun_learning()
+
+        self.logger.close()
+
+
+    def run_game(self, gran, learner=None, const_learner=True, policy="greedy"):
+        self.gran = gran
+
+        if learner == None:
+            self.run_myself()
+        elif const_learner:
+            self.run_const_learner(learner, policy)
+        else:
+            self.run_non_const_learner(learner, policy)
 
         pygame.quit()
 
 
 if __name__ == '__main__':
     game = Game()
-    game.run_game("qlearning")
+    #game.run_game("sarsa")
+    # game.run_game("qlearning")
+    #game.run_game("qlearning", False)
+    #game.run_game(50, "sarsa", False)
+    #game.run_game(40, "sarsa", False)
+    game.run_game(40, "sarsa", False, "random")
+    #game.run_game(25, "sarsa", False)
+    # game.run_game()

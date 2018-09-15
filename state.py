@@ -8,8 +8,9 @@ class State:
   :var circlePosition
   '''
 
-  def __init__(self, sensor_measurings):
+  def __init__(self, sensor_measurings, gran=50):
     self.measurings = sensor_measurings
+    self.granularity = gran
 
   def hash(self):
     result = 0
@@ -18,6 +19,6 @@ class State:
       if measure is None:
         result += 50
       else:
-        result += int(measure / 50)
+        result += int(measure / self.granularity)
 
     return result
